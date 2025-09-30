@@ -75,7 +75,7 @@ def add_time_budget_constraint(model: pulp.LpProblem, x: Dict, y: Dict, s: pulp.
     Time Budget Constraint: ∑x_i + ∑y_j + s ≤ H // here the given should not be exceeded.
     """
     total_time = pulp.lpSum([x[i] for i in x]) + pulp.lpSum([y[j] for j in y]) + s
-    model += total_time <= H, "TimeBudget"
+    model += total_time == H, "TimeBudget"
 
 
 def add_subject_minimum_constraints(model: pulp.LpProblem, x: Dict, subjects: List[Subject]):
