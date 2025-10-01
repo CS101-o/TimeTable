@@ -1,5 +1,5 @@
 from typing import List
-from ILP import solve_resource_allocation, Subject, Coursework, Parameters, Solution
+from ILP import solve_allocation, Subject, Coursework, Parameters, Solution
 from greedy_placement import (
     generate_time_blocks, generate_available_slots, place_blocks_greedy,
     ScheduleConfig, LectureSchedule, print_schedule
@@ -23,7 +23,7 @@ def create_complete_schedule(
     print("=" * 80)
 
     params = Parameters(total_hours=total_hours, mode=optimization_mode)
-    solution = solve_resource_allocation(subjects, coursework, params)
+    solution = solve_allocation(subjects, coursework, params)
 
     if not solution.feasible:
         print("❌ Phase 1 failed: No feasible resource allocation")
