@@ -2,12 +2,32 @@
 Resource allocation optimizer using linear programming.
 Balances study time across subjects and coursework deadlines.
 """
-
+import logging
 import pulp
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
-import math
 
+
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
+
+class ValidationError(ValueError):
+    """ happens with incorrect inputs.
+        we will not have custom value errors.
+        this is only for the better coding convention to
+        help us.
+
+    """
+    pass
+
+class OptimizationError(Exception):
+    """
+    Todo: add logging and time-out errors
+    Although optimisation errors are unlikely to happen in regular use, we will need that functionality
+    when we push the LP model to its limits in the extensive testing phase.
+
+    """
+    pass
 
 @dataclass
 class Subject:
@@ -16,6 +36,22 @@ class Subject:
     min_hours: float  # min weekly study time
     priority: int  # 1-5, higher = more important
     performance: float  # current grade/performance 0-1
+
+    def __post_init__(self):
+        if self.min_hours < 0:
+            raise ValidationError(
+                f"Subject {self.name} cannot have negative hours, returning {self.min_hours}"
+            )
+        if not 1 <= self.priority <= 5:
+            raise ValidationError(
+                f"Subject {self.name} must have a priority input between 1 and 5, but recieved {self.priority}"
+            )
+        if not 0 <= self.performance <= 1:
+            raise ValidationError(
+                f"Subject {self.name} must have a performance value between 1 and 0, but recieved {self.performance}"
+            )
+
+
 
 
 @dataclass
@@ -26,12 +62,35 @@ class Coursework:
     urgency: float  # 0-1, deadline pressure
     complexity: float  # 1-5 difficulty rating
 
+    def __post_init__(self):
+        if self.estimated_hours< 0:
+            raise ValidationError(
+                f" {self.name}:{self.id} cannot have negative hours, returning {self.estimated_hours}"
+            )
+        if not 1 <= self.complexity <= 5:
+            raise ValidationError(
+                f"{self.name}:{self.id} must have a complexity input between 1 and 5, but recieved {self.complexity}"
+            )
+        if not 0 <= self.urgency <= 1:
+            raise ValidationError(
+                f"{self.name}:{self.id}  must have a urgency value between 1 and 0, but recieved {self.urgency}"
+            )
+
 
 @dataclass
 class Parameters:
     total_hours: float
     mode: str
     alpha: float = 0.1  # slack penalty weight
+
+    def __post_init__(self):
+        if self.total_hours <= 0:
+            raise ValidationError(f"total_hours must be positive, got {self.total_hours}")
+        if self.alpha < 0:
+            raise ValidationError(f"alpha must be non-negative, got {self.alpha}")
+        valid_mode = ["harm_reduction", "balanced", "perfection"]
+        if self.mode not in valid_mode:
+            raise ValidationError(f"mode must be one of the {valid_mode}, got {self.mode}")
 
 
 @dataclass
@@ -41,6 +100,7 @@ class Solution:
     y: Dict[int, float]  # coursework allocation
     s: float  # unused time
     objective_value: float
+
 
 
 # Struggling students need more time than the minimum
@@ -127,6 +187,20 @@ def create_variables(subjects: List[Subject], coursework: List[Coursework]) -> T
 def solve_allocation(subjects: List[Subject], coursework: List[Coursework],
                      params: Parameters) -> Solution:
     """Main solver - builds and solves the LP model."""
+
+    # Input validation
+    if not subjects:
+        raise ValidationError("At least one subject is required")
+    if not coursework:
+        raise ValidationError("At least one coursework item is required")
+
+    # Check feasibility before solving
+    min_time_boundary = calc_min_requirements(subjects,coursework)
+    if min_time_boundary > params.total_hours:
+        logger.warning(f"Problem appears infeasible: need {min_time_boundary:.1f}h but only have {params.total_hours:.1f}h")
+
+    logger.info(f"Solving {params.mode} mode with {len(subjects)} subjects and {len(coursework)} coursework items")
+
     model = pulp.LpProblem("ResourceAllocation", pulp.LpMinimize)
 
     x, y, s = create_variables(subjects, coursework)
@@ -151,9 +225,13 @@ def solve_allocation(subjects: List[Subject], coursework: List[Coursework],
     model += objective
 
     # Solve it
-    status = model.solve(pulp.PULP_CBC_CMD(msg=0))
+    try:
+        status = model.solve(pulp.PULP_CBC_CMD(msg=0))
+    except Exception as e:
+        raise OptimizationError(f"Solver failed: {str(e)}")
 
     if status == pulp.LpStatusOptimal:
+        logger.info(f"Optimal solution found with objective value {pulp.value(model.objective):.4f}")
         return Solution(
             feasible=True,
             x={i: x[i].varValue for i in x},
@@ -162,6 +240,8 @@ def solve_allocation(subjects: List[Subject], coursework: List[Coursework],
             objective_value=pulp.value(model.objective)
         )
     else:
+        status_name = pulp.LpStatus.get(status, f"Unknown({status})")
+        logger.error(f"Optimization failed with status: {status_name}")
         return Solution(
             feasible=False,
             x={}, y={}, s=0.0,
@@ -263,22 +343,30 @@ def make_test_data():
 
     return subjects, coursework
 
-
 def run_example():
     """Quick test run."""
-    subjects, coursework = make_test_data()
-    params = Parameters(total_hours=40.0, mode="balanced")
+    try:
+        subjects, coursework = make_test_data()
+        params = Parameters(total_hours=40.0, mode="balanced")
 
-    print_formulation(subjects, coursework, params)
+        print_formulation(subjects, coursework, params)
 
-    solution = solve_allocation(subjects, coursework, params)
+        solution = solve_allocation(subjects, coursework, params)
 
-    print_solution(solution, subjects, coursework)
+        print_solution(solution, subjects, coursework)
 
-    min_req = calc_min_requirements(subjects, coursework)
-    print(f"\nMinimum required: {min_req:.2f} hours")
-    print(f"Available: {params.total_hours} hours")
-    print(f"Feasible: {'Yes' if min_req <= params.total_hours else 'No'}")
+        min_req = calc_min_requirements(subjects, coursework)
+        print(f"\nMinimum required: {min_req:.2f} hours")
+        print(f"Available: {params.total_hours} hours")
+        print(f"Feasible: {'Yes' if min_req <= params.total_hours else 'No'}")
+
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+    except OptimizationError as e:
+        logger.error(f"Optimization error: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise
 
 
 if __name__ == "__main__":
